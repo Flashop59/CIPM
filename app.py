@@ -2,60 +2,81 @@ import streamlit as st
 import cv2
 import numpy as np
 from PIL import Image
+import os
+import matplotlib.pyplot as plt
 
-# Function to apply the GrabCut algorithm for clothes segmentation
-def grabcut_clothes_segmentation(image_pil):
-    # Convert PIL image to OpenCV format (BGR)
-    image = np.array(image_pil)[:, :, ::-1]
+# Function to load image and convert to HSV
+def load_image(image_path):
+    image = cv2.imread(image_path)
+    hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    return image, hsv_image
 
-    # Create an initial mask for GrabCut
-    mask = np.zeros(image.shape[:2], np.uint8)
+# Function to generate mask for clothes based on color range
+def get_clothes_mask(hsv_image, lower_color, upper_color, no_hair):
+    # Create mask for the color range
+    clothes_mask = cv2.inRange(hsv_image, lower_color, upper_color)
+    
+    if no_hair:
+        # Assuming hair is typically darker, filter out hair using HSV range
+        lower_hair = np.array([0, 0, 0], dtype=np.uint8)  # Adjust for darker shades
+        upper_hair = np.array([180, 255, 80], dtype=np.uint8)
+        hair_mask = cv2.inRange(hsv_image, lower_hair, upper_hair)
+        
+        # Invert the hair mask to exclude hair regions
+        hair_mask_inv = cv2.bitwise_not(hair_mask)
+        clothes_mask = cv2.bitwise_and(clothes_mask, hair_mask_inv)
+    
+    return clothes_mask
 
-    # Define background and foreground models for GrabCut
-    bgd_model = np.zeros((1, 65), np.float64)
-    fgd_model = np.zeros((1, 65), np.float64)
+# Function to save and display the mask
+def save_mask(mask, original_image, mask_output_path):
+    os.makedirs(os.path.dirname(mask_output_path), exist_ok=True)
+    mask_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+    masked_image = cv2.bitwise_and(original_image, mask_rgb)
+    cv2.imwrite(mask_output_path, mask)
+    return masked_image
 
-    # Define a rectangle around the region where clothes are likely to appear
-    height, width = image.shape[:2]
-    rect = (int(width * 0.1), int(height * 0.2), int(width * 0.9), int(height * 0.9))  # Exclude top 20% (likely head)
+# Streamlit App
+st.title("Clothes Masking App for Stable Diffusion")
 
-    # Apply the GrabCut algorithm
-    cv2.grabCut(image, mask, rect, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_RECT)
+# Image upload
+uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
 
-    # Create a binary mask where 0 and 2 are background, and 1 and 3 are foreground (clothes)
-    mask2 = np.where((mask == 2) | (mask == 0), 0, 1).astype('uint8')
-
-    # Use the mask to extract the clothes from the image
-    result = image * mask2[:, :, np.newaxis]
-
-    return result
-
-# Streamlit interface
-st.title("Clothes Segmentation App (GrabCut)")
-
-# Upload image
-uploaded_image = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
-
-if uploaded_image is not None:
-    # Convert the uploaded image to PIL format
-    image_pil = Image.open(uploaded_image).convert("RGB")
-
-    # Display the uploaded image
-    st.image(image_pil, caption="Uploaded Image", use_column_width=True)
-
-    # Apply the GrabCut algorithm for clothes segmentation
-    segmented_image = grabcut_clothes_segmentation(image_pil)
-
-    # Convert the segmented result to PIL for display
-    result_pil = Image.fromarray(cv2.cvtColor(segmented_image, cv2.COLOR_BGR2RGB))
-
-    # Display the result
-    st.image(result_pil, caption="Clothes Mask", use_column_width=True)
-
-    # Allow downloading of the masked image
-    st.download_button(
-        label="Download Masked Image",
-        data=result_pil.tobytes(),
-        file_name="clothes_mask.png",
-        mime="image/png"
-    )
+if uploaded_file is not None:
+    image_path = "input_image.png"
+    with open(image_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    
+    # Display uploaded image
+    st.image(Image.open(image_path), caption='Uploaded Image', use_column_width=True)
+    
+    # Load the image and convert to HSV
+    original_image, hsv_image = load_image(image_path)
+    
+    # Color range selection (in HSV format)
+    st.write("Select the color range of the clothes:")
+    lower_h = st.slider("Lower Hue", 0, 180, 0)
+    lower_s = st.slider("Lower Saturation", 0, 255, 50)
+    lower_v = st.slider("Lower Value", 0, 255, 50)
+    upper_h = st.slider("Upper Hue", 0, 180, 180)
+    upper_s = st.slider("Upper Saturation", 0, 255, 255)
+    upper_v = st.slider("Upper Value", 0, 255, 255)
+    
+    lower_color = np.array([lower_h, lower_s, lower_v], dtype=np.uint8)
+    upper_color = np.array([upper_h, upper_s, upper_v], dtype=np.uint8)
+    
+    # Option to exclude hair from mask
+    no_hair = st.checkbox("Exclude Hair from Mask", value=True)
+    
+    # Mask generation
+    if st.button("Generate Mask"):
+        clothes_mask = get_clothes_mask(hsv_image, lower_color, upper_color, no_hair)
+        mask_output_path = "clothes_mask.png"
+        
+        # Save and display mask
+        masked_image = save_mask(clothes_mask, original_image, mask_output_path)
+        st.image(masked_image, caption='Generated Mask', use_column_width=True)
+        
+        # Provide download link for the mask
+        with open(mask_output_path, "rb") as f:
+            st.download_button("Download Mask", f, file_name="clothes_mask.png", mime="image/png")
