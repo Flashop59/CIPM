@@ -10,10 +10,18 @@ def load_image(image):
     hsv_image = cv2.cvtColor(original_image, cv2.COLOR_RGB2HSV)
     return original_image, hsv_image
 
-# Step 2: Define the color range for clothes
-def get_clothes_mask(hsv_image, lower_color, upper_color):
-    # Create a mask that only includes pixels within the color range
+# Step 2: Define the color range for clothes and exclude the upper region (hair)
+def get_clothes_mask(hsv_image, lower_color, upper_color, hair_exclusion_ratio=0.2):
+    # Get image dimensions
+    height, width = hsv_image.shape[:2]
+
+    # Define the mask that only includes pixels within the color range
     mask = cv2.inRange(hsv_image, lower_color, upper_color)
+
+    # Exclude the top portion of the mask (which may contain hair) by zeroing it out
+    exclusion_height = int(height * hair_exclusion_ratio)
+    mask[:exclusion_height, :] = 0  # Exclude top 20% of the image (adjust ratio as needed)
+
     return mask
 
 # Step 3: Save the mask and convert it to Pillow image for download
@@ -23,7 +31,7 @@ def create_downloadable_mask(mask, original_image):
     return Image.fromarray(mask)
 
 # Streamlit app
-st.title("Clothes Color Masking App")
+st.title("Clothes Color Masking App (Excluding Hair)")
 
 # Step 4: Upload Image
 uploaded_image = st.file_uploader("Upload an Image", type=["jpg", "jpeg", "png"])
@@ -49,11 +57,11 @@ if uploaded_image is not None:
     lower_color = np.array([lower_h, lower_s, lower_v])
     upper_color = np.array([upper_h, upper_s, upper_v])
 
-    # Step 6: Generate the clothes mask
+    # Step 6: Generate the clothes mask and exclude hair
     clothes_mask = get_clothes_mask(hsv_image, lower_color, upper_color)
 
     # Display the generated mask
-    st.write("Generated Mask")
+    st.write("Generated Mask (Hair Excluded)")
     st.image(clothes_mask, caption='Clothes Mask', use_column_width=True, clamp=True)
 
     # Create downloadable mask
@@ -64,6 +72,6 @@ if uploaded_image is not None:
     mask_download = st.download_button(
         label="Download Mask",
         data=masked_image_pil.tobytes(),
-        file_name="clothes_mask.png",
+        file_name="clothes_mask_no_hair.png",
         mime="image/png"
     )
