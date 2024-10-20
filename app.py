@@ -1,85 +1,61 @@
 import streamlit as st
-import torch
-from PIL import Image
-import cv2
 import numpy as np
-import os
-from torchvision import models, transforms
-import matplotlib.pyplot as plt
+import cv2
+from PIL import Image
 
-# Step 1: Load the DeepLabV3 segmentation model
-model = models.segmentation.deeplabv3_resnet101(weights="COCO_WITH_VOC_LABELS_V1")
-model.eval()
+# Function to apply the GrabCut algorithm for clothes segmentation
+def grabcut_clothes_segmentation(image_pil):
+    # Convert PIL image to OpenCV format (BGR)
+    image = np.array(image_pil)[:, :, ::-1]
 
-# Step 2: Preprocess the uploaded image for the DeepLab model
-def preprocess(image):
-    preprocess_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-    return preprocess_transform(image).unsqueeze(0)
+    # Create an initial mask for GrabCut
+    mask = np.zeros(image.shape[:2], np.uint8)
 
-# Step 3: Generate segmentation mask and filter for clothes
-def generate_clothes_mask(image_tensor, image_pil):
-    with torch.no_grad():
-        output = model(image_tensor)['out'][0]
-    output_predictions = output.argmax(0).byte().cpu().numpy()
+    # Define background and foreground models for GrabCut
+    bgd_model = np.zeros((1, 65), np.float64)
+    fgd_model = np.zeros((1, 65), np.float64)
 
-    # Filter out everything except the "person" class (category 15 in DeepLabV3)
-    person_mask = (output_predictions == 15).astype(np.uint8) * 255
+    # Define a rectangle around the region where clothes are likely to appear
+    height, width = image.shape[:2]
+    rect = (int(width * 0.1), int(height * 0.1), int(width * 0.9), int(height * 0.9))
 
-    # Convert the mask to a format usable by OpenCV
-    person_mask_cv = np.array(person_mask, dtype=np.uint8)
+    # Apply the GrabCut algorithm
+    cv2.grabCut(image, mask, rect, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_RECT)
 
-    # Exclude non-clothing areas (use HSV or other methods)
-    original_image_cv = np.array(image_pil)[:, :, ::-1]  # Convert PIL to OpenCV BGR format
-    hsv_image = cv2.cvtColor(original_image_cv, cv2.COLOR_BGR2HSV)
+    # Create a binary mask where 0 and 2 are background, and 1 and 3 are foreground (clothes)
+    mask2 = np.where((mask == 2) | (mask == 0), 0, 1).astype('uint8')
 
-    # Define HSV ranges for typical clothing colors (adjust as needed)
-    lower_clothes_hsv = np.array([0, 30, 60])
-    upper_clothes_hsv = np.array([179, 255, 255])
+    # Use the mask to extract the clothes from the image
+    result = image * mask2[:, :, np.newaxis]
 
-    clothes_mask_hsv = cv2.inRange(hsv_image, lower_clothes_hsv, upper_clothes_hsv)
+    return result
 
-    # Combine the person mask with the clothes color mask to get a clean clothing mask
-    combined_mask = cv2.bitwise_and(person_mask_cv, clothes_mask_hsv)
+# Streamlit interface
+st.title("Clothes Segmentation with GrabCut")
 
-    return combined_mask
-
-# Step 4: Create a downloadable mask as a PNG
-def create_downloadable_mask(mask):
-    mask_pil = Image.fromarray(mask)
-    return mask_pil
-
-# Streamlit app interface
-st.title("Clothes Masking App")
-
-# Step 5: Upload the image
-uploaded_image = st.file_uploader("Upload an image (jpg, jpeg, png)", type=["jpg", "jpeg", "png"])
+# Upload image
+uploaded_image = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
 
 if uploaded_image is not None:
-    # Convert uploaded image to PIL format
+    # Convert the uploaded image to PIL format
     image_pil = Image.open(uploaded_image).convert("RGB")
-    
+
     # Display the uploaded image
     st.image(image_pil, caption="Uploaded Image", use_column_width=True)
 
-    # Step 6: Preprocess the image and generate the mask
-    image_tensor = preprocess(image_pil)
-    clothes_mask = generate_clothes_mask(image_tensor, image_pil)
+    # Apply the GrabCut algorithm for clothes segmentation
+    segmented_image = grabcut_clothes_segmentation(image_pil)
 
-    # Step 7: Display the mask
-    st.write("Generated Clothes Mask")
-    st.image(clothes_mask, caption="Clothes Mask", use_column_width=True, clamp=True)
+    # Convert the segmented result to PIL for display
+    result_pil = Image.fromarray(cv2.cvtColor(segmented_image, cv2.COLOR_BGR2RGB))
 
-    # Step 8: Create a downloadable version of the mask
-    downloadable_mask = create_downloadable_mask(clothes_mask)
-    st.write("Download the generated mask:")
-    
-    # Step 9: Provide a download button for the mask
-    mask_download = st.download_button(
-        label="Download Mask",
-        data=downloadable_mask.tobytes(),
+    # Display the result
+    st.image(result_pil, caption="Clothes Mask", use_column_width=True)
+
+    # Allow downloading of the masked image
+    st.download_button(
+        label="Download Masked Image",
+        data=result_pil.tobytes(),
         file_name="clothes_mask.png",
         mime="image/png"
     )
