@@ -1,77 +1,85 @@
 import streamlit as st
+import torch
+from PIL import Image
 import cv2
 import numpy as np
-from PIL import Image
 import os
+from torchvision import models, transforms
+import matplotlib.pyplot as plt
 
-# Step 1: Load the image and convert to HSV
-def load_image(image):
-    original_image = np.array(image)
-    hsv_image = cv2.cvtColor(original_image, cv2.COLOR_RGB2HSV)
-    return original_image, hsv_image
+# Step 1: Load the DeepLabV3 segmentation model
+model = models.segmentation.deeplabv3_resnet101(weights="COCO_WITH_VOC_LABELS_V1")
+model.eval()
 
-# Step 2: Define the color range for clothes and exclude the upper region (hair)
-def get_clothes_mask(hsv_image, lower_color, upper_color, hair_exclusion_ratio=0.2):
-    # Get image dimensions
-    height, width = hsv_image.shape[:2]
+# Step 2: Preprocess the uploaded image for the DeepLab model
+def preprocess(image):
+    preprocess_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    return preprocess_transform(image).unsqueeze(0)
 
-    # Define the mask that only includes pixels within the color range
-    mask = cv2.inRange(hsv_image, lower_color, upper_color)
+# Step 3: Generate segmentation mask and filter for clothes
+def generate_clothes_mask(image_tensor, image_pil):
+    with torch.no_grad():
+        output = model(image_tensor)['out'][0]
+    output_predictions = output.argmax(0).byte().cpu().numpy()
 
-    # Exclude the top portion of the mask (which may contain hair) by zeroing it out
-    exclusion_height = int(height * hair_exclusion_ratio)
-    mask[:exclusion_height, :] = 0  # Exclude top 20% of the image (adjust ratio as needed)
+    # Filter out everything except the "person" class (category 15 in DeepLabV3)
+    person_mask = (output_predictions == 15).astype(np.uint8) * 255
 
-    return mask
+    # Convert the mask to a format usable by OpenCV
+    person_mask_cv = np.array(person_mask, dtype=np.uint8)
 
-# Step 3: Save the mask and convert it to Pillow image for download
-def create_downloadable_mask(mask, original_image):
-    mask_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
-    masked_image = cv2.bitwise_and(original_image, mask_rgb)
-    return Image.fromarray(mask)
+    # Exclude non-clothing areas (use HSV or other methods)
+    original_image_cv = np.array(image_pil)[:, :, ::-1]  # Convert PIL to OpenCV BGR format
+    hsv_image = cv2.cvtColor(original_image_cv, cv2.COLOR_BGR2HSV)
 
-# Streamlit app
-st.title("Clothes Color Masking App (Excluding Hair)")
+    # Define HSV ranges for typical clothing colors (adjust as needed)
+    lower_clothes_hsv = np.array([0, 30, 60])
+    upper_clothes_hsv = np.array([179, 255, 255])
 
-# Step 4: Upload Image
-uploaded_image = st.file_uploader("Upload an Image", type=["jpg", "jpeg", "png"])
+    clothes_mask_hsv = cv2.inRange(hsv_image, lower_clothes_hsv, upper_clothes_hsv)
+
+    # Combine the person mask with the clothes color mask to get a clean clothing mask
+    combined_mask = cv2.bitwise_and(person_mask_cv, clothes_mask_hsv)
+
+    return combined_mask
+
+# Step 4: Create a downloadable mask as a PNG
+def create_downloadable_mask(mask):
+    mask_pil = Image.fromarray(mask)
+    return mask_pil
+
+# Streamlit app interface
+st.title("Clothes Masking App")
+
+# Step 5: Upload the image
+uploaded_image = st.file_uploader("Upload an image (jpg, jpeg, png)", type=["jpg", "jpeg", "png"])
 
 if uploaded_image is not None:
-    # Display the uploaded image
-    image = Image.open(uploaded_image)
-    st.image(image, caption='Uploaded Image', use_column_width=True)
+    # Convert uploaded image to PIL format
+    image_pil = Image.open(uploaded_image).convert("RGB")
     
-    # Step 5: Input for selecting HSV color range
-    st.write("Select the HSV color range for the clothing")
-    lower_h = st.slider("Lower Hue", 0, 180, 0)
-    lower_s = st.slider("Lower Saturation", 0, 255, 50)
-    lower_v = st.slider("Lower Value", 0, 255, 50)
-    upper_h = st.slider("Upper Hue", 0, 180, 180)
-    upper_s = st.slider("Upper Saturation", 0, 255, 255)
-    upper_v = st.slider("Upper Value", 0, 255, 255)
+    # Display the uploaded image
+    st.image(image_pil, caption="Uploaded Image", use_column_width=True)
 
-    # Convert the uploaded image into an HSV format for masking
-    original_image, hsv_image = load_image(image)
+    # Step 6: Preprocess the image and generate the mask
+    image_tensor = preprocess(image_pil)
+    clothes_mask = generate_clothes_mask(image_tensor, image_pil)
 
-    # Define the color range for clothes
-    lower_color = np.array([lower_h, lower_s, lower_v])
-    upper_color = np.array([upper_h, upper_s, upper_v])
+    # Step 7: Display the mask
+    st.write("Generated Clothes Mask")
+    st.image(clothes_mask, caption="Clothes Mask", use_column_width=True, clamp=True)
 
-    # Step 6: Generate the clothes mask and exclude hair
-    clothes_mask = get_clothes_mask(hsv_image, lower_color, upper_color)
-
-    # Display the generated mask
-    st.write("Generated Mask (Hair Excluded)")
-    st.image(clothes_mask, caption='Clothes Mask', use_column_width=True, clamp=True)
-
-    # Create downloadable mask
-    masked_image_pil = create_downloadable_mask(clothes_mask, original_image)
-
-    # Step 7: Provide a download button for the mask
-    st.write("Download the generated mask")
+    # Step 8: Create a downloadable version of the mask
+    downloadable_mask = create_downloadable_mask(clothes_mask)
+    st.write("Download the generated mask:")
+    
+    # Step 9: Provide a download button for the mask
     mask_download = st.download_button(
         label="Download Mask",
-        data=masked_image_pil.tobytes(),
-        file_name="clothes_mask_no_hair.png",
+        data=downloadable_mask.tobytes(),
+        file_name="clothes_mask.png",
         mime="image/png"
     )
