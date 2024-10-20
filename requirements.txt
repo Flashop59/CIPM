@@ -1,5 +1,6 @@
 streamlit
+torch
+torchvision
+pillow
 opencv-python-headless
 matplotlib
-Pillow
-numpy
