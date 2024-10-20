@@ -1,6 +1,6 @@
 import streamlit as st
-import numpy as np
 import cv2
+import numpy as np
 from PIL import Image
 
 # Function to apply the GrabCut algorithm for clothes segmentation
@@ -17,7 +17,7 @@ def grabcut_clothes_segmentation(image_pil):
 
     # Define a rectangle around the region where clothes are likely to appear
     height, width = image.shape[:2]
-    rect = (int(width * 0.1), int(height * 0.1), int(width * 0.9), int(height * 0.9))
+    rect = (int(width * 0.1), int(height * 0.2), int(width * 0.9), int(height * 0.9))  # Exclude top 20% (likely head)
 
     # Apply the GrabCut algorithm
     cv2.grabCut(image, mask, rect, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_RECT)
@@ -31,7 +31,7 @@ def grabcut_clothes_segmentation(image_pil):
     return result
 
 # Streamlit interface
-st.title("Clothes Segmentation with GrabCut")
+st.title("Clothes Segmentation App (GrabCut)")
 
 # Upload image
 uploaded_image = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
